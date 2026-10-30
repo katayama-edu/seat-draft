@@ -1,0 +1,93 @@
+rules_version = '2';
+
+// 席替えドラフト会議 Security Rules
+//
+// - 教員: Google ログイン + admins/{uid} に登録されていること（登録は Firebase コンソールから手動）
+// - 生徒: 匿名ログイン。書き込めるのは「自分の参加登録」と「自分の 1 票」だけ
+// - 投票は結果発表まで本人と担当教員しか読めない。発表時に教員が rounds に公開する
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function isTeacher() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(uid()));
+    }
+    function roomData(roomId) {
+      return get(/databases/$(database)/documents/rooms/$(roomId)).data;
+    }
+    function isRoomOwner(roomId) {
+      return isTeacher() && roomData(roomId).ownerUid == uid();
+    }
+
+    // 教員名簿。書き込みはコンソールからのみ
+    match /admins/{adminUid} {
+      allow read: if signedIn() && uid() == adminUid;
+      allow write: if false;
+    }
+
+    match /rooms/{roomId} {
+      allow read: if signedIn();
+      allow create: if isTeacher() && request.resource.data.ownerUid == uid();
+      allow update: if isTeacher()
+        && resource.data.ownerUid == uid()
+        && request.resource.data.ownerUid == uid();
+      allow delete: if isTeacher() && resource.data.ownerUid == uid();
+
+      // 参加者。生徒は自分のドキュメントを作るだけ（名前・性別の修正や削除は教員）
+      match /players/{playerUid} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && uid() == playerUid
+          && roomData(roomId).phase != 'finished'
+          && request.resource.data.keys().hasOnly(['name', 'gender', 'joinedAt'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() >= 1
+          && request.resource.data.name.size() <= 20
+          && request.resource.data.gender in ['M', 'F']
+          && request.resource.data.joinedAt == request.time;
+        allow update, delete: if isRoomOwner(roomId);
+      }
+
+      // 投票。ID は "{drawNo}-{round}-{uid}" 固定なので 1 ラウンド 1 票、create のみで変更不可
+      match /votes/{voteId} {
+        // 本人判定は ID で行う（投票前の「まだ無い自分の票」も監視できるように）
+        allow read: if isRoomOwner(roomId)
+          || (signedIn() && voteId.split('-')[2] == uid());
+        allow create: if signedIn() && validVote(roomId, voteId);
+        allow delete: if isRoomOwner(roomId);
+        allow update: if false;
+      }
+
+      // ラウンド結果（全投票を含む）。発表後に教員が書き込み、全員が読める
+      match /rounds/{roundId} {
+        allow read: if signedIn();
+        allow write: if isRoomOwner(roomId);
+      }
+    }
+
+    function validVote(roomId, voteId) {
+      let r = roomData(roomId);
+      let v = request.resource.data;
+      let me = get(/databases/$(database)/documents/rooms/$(roomId)/players/$(uid())).data;
+      return v.keys().hasOnly(['uid', 'drawNo', 'round', 'seatId', 'createdAt'])
+        && r.phase == 'voting'
+        && v.uid == uid()
+        && v.drawNo == r.drawNo
+        && v.round == r.round
+        && v.createdAt == request.time
+        && voteId == string(r.drawNo) + '-' + string(r.round) + '-' + uid()
+        && exists(/databases/$(database)/documents/rooms/$(roomId)/players/$(uid()))
+        // 投票資格: 1 回目は未確定の参加者全員、2 回目以降は競合した人だけ
+        && !(uid() in r.assignments.values())
+        && (r.round == 1 || uid() in r.eligibleUids)
+        // 座席: 存在する・空席・性別が合う
+        && v.seatId is string
+        && v.seatId in r.seatTypes
+        && r.assignments.get(v.seatId, null) == null
+        && (r.seatTypes[v.seatId] == 'any' || r.seatTypes[v.seatId] == me.gender)
+        // 競合席は、その席で競合した人だけが投票できる
+        && (!(v.seatId in r.reservedSeats) || uid() in r.reservedSeats[v.seatId]);
+    }
+  }
+}

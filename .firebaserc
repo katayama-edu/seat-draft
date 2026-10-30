@@ -1,1 +1,6 @@
-{ "projects": { "default": "demo-seat-draft" } }
+{
+  "projects": {
+    "default": "demo-seat-draft",
+    "prod": "seat-draft-da1dd"
+  }
+}

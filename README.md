@@ -22,9 +22,16 @@
    - **本番環境モード**で開始します（ルールはこの後のデプロイで上書きされます）。
 4. **Hosting** →「始める」。画面の手順は飛ばして構いません（デプロイはこの後のコマンドで行います）。
 
-### 2. パソコンでデプロイする
+### 2. 自動デプロイを設定する
 
-Node.js 20 以上が必要です。
+`master` ブランチに push すると、GitHub Actions（`.github/workflows/deploy.yml`）がテストを実行し、成功したら Firebase にデプロイします。そのために、次の2つを設定します。
+
+1. **デプロイ用の鍵**: Google Cloud コンソールでサービスアカウント（ロール「Firebase 管理者」）を作り、JSON 鍵を発行します。その中身を、GitHub リポジトリの Settings → Secrets and variables → Actions に `FIREBASE_SERVICE_ACCOUNT` という名前で登録します。
+2. **デプロイ先**: `.firebaserc` の `projects.prod` に、本番のプロジェクト ID を書きます。
+
+どちらかが欠けている場合、デプロイはスキップされます（テストだけ実行されます）。
+
+手元のパソコンからデプロイすることもできます（Node.js 20 以上と Java 11 以上が必要です）。
 
 ```bash
 npm install
@@ -35,16 +42,8 @@ npx firebase login
 ```
 
 ```bash
-npx firebase use --add
+npm run deploy -- --project prod
 ```
-
-（作成したプロジェクトを選び、別名は `default` にしてください）
-
-```bash
-npm run deploy
-```
-
-ビルド、テスト（Security Rules の自動テスト）、デプロイを順に行います。テストには Java 11 以上が必要です。Java がない場合は、`npm run build` を実行した後に `npx firebase deploy --only hosting,firestore` でデプロイできます。
 
 ### 3. 自分を管理者として登録する
 
